@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phân tích Rung động MPU6050 (FFT & PID & Góc)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN for charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        /* Custom styles for better readability and centering */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        .card {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+    <div class="max-w-7xl mx-auto">
+        <!-- HEADER -->
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 flex items-center">
+            <i data-lucide="activity" class="mr-3 text-indigo-600"></i>
+            Dashboard Phân tích Rung động (FFT & PID & Góc)
+        </h1>
+
+        <!-- KPI Metrics for FFT Data -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <!-- RMS Value (Typically Z or Overall) -->
+            <div class="card bg-white p-6 rounded-xl border border-gray-200">
+                <div class="flex items-center">
+                    <div class="p-3 bg-indigo-100 rounded-full mr-4">
+                        <i data-lucide="zap" class="w-6 h-6 text-indigo-600"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-gray-500">Giá trị RMS (g)</p>
+                        <p id="rms-value" class="text-3xl font-extrabold text-gray-900">0.000</p>
+                    </div>
+                </div>
+            </div>
+            <!-- Peak Frequency -->
+            <div class="card bg-white p-6 rounded-xl border border-gray-200">
+                <div class="flex items-center">
+                    <div class="p-3 bg-green-100 rounded-full mr-4">
+                        <i data-lucide="gauge" class="w-6 h-6 text-green-600"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-gray-500">Tần số đỉnh (Hz)</p>
+                        <p id="peak-freq-value" class="text-3xl font-extrabold text-gray-900">0.0</p>
+                    </div>
+                </div>
+            </div>
+            <!-- Peak Amplitude (Max across 3 axes) -->
+            <div class="card bg-white p-6 rounded-xl border border-gray-200">
+                <div class="flex items-center">
+                    <div class="p-3 bg-red-100 rounded-full mr-4">
+                        <i data-lucide="bar-chart-2" class="w-6 h-6 text-red-600"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-gray-500">Biên độ đỉnh Max (Amp)</p>
+                        <p id="peak-amp-value" class="text-3xl font-extrabold text-gray-900">0.000</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PID Control Status Block -->
+        <div class="card bg-white p-6 rounded-xl border border-gray-200 mb-8">
+            <h2 class="text-xl font-semibold text-gray-700 mb-4 flex items-center">
+                <i data-lucide="sliders" class="w-5 h-5 mr-2 text-blue-600"></i>
+                Trạng thái Điều khiển PID
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <!-- PID Output (PWM) -->
+                <div class="border p-4 rounded-xl bg-blue-50 border-blue-200">
+                    <p class="text-sm font-medium text-gray-600">Lực Điều khiển (PWM)</p>
+                    <p id="pid-output-value" class="text-3xl font-extrabold text-blue-700 mt-1">0</p>
+                    <p id="pid-direction" class="text-sm font-semibold text-gray-500 mt-1 flex items-center">
+                        <i data-lucide="square" class="w-3 h-3 mr-1"></i> Dừng (Stop)
+                    </p>
+                </div>
+                <!-- Setpoint (Static display from main.cpp) -->
+                <div class="border p-4 rounded-xl bg-gray-50 border-gray-200">
+                    <p class="text-sm font-medium text-gray-600">Điểm đặt RMS (g)</p>
+                    <p id="setpoint-value" class="text-3xl font-extrabold text-gray-700 mt-1">0.08</p>
+                    <p class="text-sm font-semibold text-gray-500 mt-1">Kp=80.0, Ki=2.0, Kd=15.0</p>
+                </div>
+                <!-- Error Status -->
+                <div class="border p-4 rounded-xl bg-yellow-50 border-yellow-200">
+                    <p class="text-sm font-medium text-gray-600">Trạng thái Lỗi (Error)</p>
+                    <p id="error-status" class="text-3xl font-extrabold text-yellow-700 mt-1">Bình thường</p>
+                    <p id="current-error" class="text-sm font-semibold text-gray-500 mt-1">Lỗi: 0.0000</p>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Charts Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Real-time Acceleration Chart (Time Domain) -->
+            <div class="card bg-white p-6 rounded-xl border border-gray-200">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4">Gia tốc 3 Trục (Miền thời gian)</h2>
+                <div class="h-64">
+                    <canvas id="timeChart"></canvas>
+                </div>
+                <p class="text-xs text-gray-400 mt-2">Gia tốc theo đơn vị g</p>
+            </div>
+
+            <!-- FFT Spectrum Chart (Frequency Domain) - NOW 3 AXES -->
+            <div class="card bg-white p-6 rounded-xl border border-gray-200">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4">Phổ tần FFT 3 Trục (Miền tần số)</h2>
+                <div class="h-64">
+                    <canvas id="fftChart"></canvas>
+                </div>
+                <p class="text-xs text-gray-400 mt-2">Tần số lấy mẫu: 1000 Hz, Kích thước mẫu: 256</p>
+            </div>
+            
+            <!-- NEW: Angle Chart -->
+            <div class="card bg-white p-6 rounded-xl border border-gray-200">
+                <h2 class="text-xl font-semibold text-gray-700 mb-4">Góc 3 Trục (Roll, Pitch, Yaw)</h2>
+                <div class="h-64">
+                    <canvas id="angleChart"></canvas>
+                </div>
+                <p class="text-xs text-gray-400 mt-2">Hiển thị góc Roll (X), Pitch (Y), Yaw (Z) theo độ.</p>
+            </div>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="mt-8 text-center">
+            <p id="status" class="text-sm font-medium text-gray-600">
+                <i data-lucide="wifi-off" class="w-4 h-4 inline mr-2 text-red-500" id="status-icon"></i>
+                Đang chờ kết nối WebSocket...
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // Khởi tạo Lucide icons
+        lucide.createIcons();
+
+        // ===================== CẤU HÌNH BIỂU ĐỒ =====================
+        const MAX_DATA_POINTS = 50; 
+        const SETPOINT = 0.08; // Điểm đặt RMS từ main.cpp
+
+        // Dữ liệu ban đầu cho biểu đồ thời gian (Gia tốc)
+        let timeLabels = Array(MAX_DATA_POINTS).fill('');
+        let xData = Array(MAX_DATA_POINTS).fill(0);
+        let yData = Array(MAX_DATA_POINTS).fill(0);
+        let zData = Array(MAX_DATA_POINTS).fill(0);
+
+        // Dữ liệu ban đầu cho biểu đồ Góc
+        let angleXData = Array(MAX_DATA_POINTS).fill(0);
+        let angleYData = Array(MAX_DATA_POINTS).fill(0);
+        let angleZData = Array(MAX_DATA_POINTS).fill(0);
+
+        // Hiển thị điểm đặt PID tĩnh
+        document.getElementById('setpoint-value').textContent = SETPOINT.toFixed(2);
+
+
+        // --- Khởi tạo biểu đồ Gia tốc (Time Domain) ---
+        const timeChartCtx = document.getElementById('timeChart').getContext('2d');
+        const timeChart = new Chart(timeChartCtx, {
+            type: 'line',
+            data: {
+                labels: timeLabels,
+                datasets: [
+                    {
+                        label: 'Gia tốc X (g)', data: xData, borderColor: 'rgb(239, 68, 68)', 
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)', borderWidth: 2, pointRadius: 0, tension: 0.1
+                    },
+                    {
+                        label: 'Gia tốc Y (g)', data: yData, borderColor: 'rgb(34, 197, 94)', 
+                        backgroundColor: 'rgba(34, 197, 94, 0.1)', borderWidth: 2, pointRadius: 0, tension: 0.1
+                    },
+                    {
+                        label: 'Gia tốc Z (g)', data: zData, borderColor: 'rgb(79, 70, 229)', 
+                        backgroundColor: 'rgba(79, 70, 229, 0.1)', borderWidth: 2, pointRadius: 0, tension: 0.1
+                    }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false,
+                scales: {
+                    x: { display: false },
+                    y: {
+                        min: -2.5, max: 2.5, title: { display: true, text: 'Gia tốc (g)' }
+                    }
+                },
+                plugins: { legend: { display: true } }
+            }
+        });
+
+        // --- Khởi tạo biểu đồ FFT (Frequency Domain) ---
+        const fftChartCtx = document.getElementById('fftChart').getContext('2d');
+        const fftChart = new Chart(fftChartCtx, {
+            type: 'line', 
+            data: {
+                labels: [], 
+                datasets: [
+                    {
+                        label: 'Phổ tần X', data: [], borderColor: 'rgb(239, 68, 68)', 
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)', borderWidth: 2, pointRadius: 0, tension: 0.2, fill: false
+                    },
+                    {
+                        label: 'Phổ tần Y', data: [], borderColor: 'rgb(34, 197, 94)', 
+                        backgroundColor: 'rgba(34, 197, 94, 0.1)', borderWidth: 2, pointRadius: 0, tension: 0.2, fill: false
+                    },
+                    {
+                        label: 'Phổ tần Z', data: [], borderColor: 'rgb(79, 70, 229)', 
+                        backgroundColor: 'rgba(79, 70, 229, 0.1)', borderWidth: 2, pointRadius: 0, tension: 0.2, fill: false
+                    }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false,
+                scales: {
+                    x: { title: { display: true, text: 'Tần số (Hz)' }, grid: { display: false } },
+                    y: { beginAtZero: true, title: { display: true, text: 'Biên độ' } }
+                },
+                plugins: { legend: { display: true } } 
+            }
+        });
+        
+        // --- Khởi tạo biểu đồ Góc (Angle Chart) ---
+        const angleChartCtx = document.getElementById('angleChart').getContext('2d');
+        const angleChart = new Chart(angleChartCtx, {
+            type: 'line',
+            data: {
+                labels: timeLabels,
+                datasets: [
+                    {
+                        label: 'Roll (X)', data: angleXData, borderColor: 'rgb(255, 159, 64)', // Orange
+                        backgroundColor: 'rgba(255, 159, 64, 0.1)', borderWidth: 2, pointRadius: 0, tension: 0.1
+                    },
+                    {
+                        label: 'Pitch (Y)', data: angleYData, borderColor: 'rgb(54, 162, 235)', // Blue
+                        backgroundColor: 'rgba(54, 162, 235, 0.1)', borderWidth: 2, pointRadius: 0, tension: 0.1
+                    },
+                    {
+                        label: 'Yaw (Z)', data: angleZData, borderColor: 'rgb(153, 102, 255)', // Purple
+                        backgroundColor: 'rgba(153, 102, 255, 0.1)', borderWidth: 2, pointRadius: 0, tension: 0.1
+                    }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false,
+                scales: {
+                    x: { display: false },
+                    y: {
+                        min: -90, max: 90, 
+                        title: { display: true, text: 'Góc (độ)' }
+                    }
+                },
+                plugins: { legend: { display: true } }
+            }
+        });
+
+
+        // ===================== WEBSOCKET LOGIC =====================
+        const hostname = window.location.hostname;
+        const port = 81; // Đã thay đổi từ 81 sang 80 để khớp với WebServer mặc định
+        const statusElement = document.getElementById('status');
+        let websocket;
+
+        function connectWebSocket() {
+            // LƯU Ý: Đã thêm '/ws' vào đường dẫn WebSocket
+            websocket = new WebSocket(`ws://${hostname}:${port}/ws`);
+            
+            //new WebSocket(`ws://${hostname}:81`);
+
+            //new WebSocket(`ws://${hostname}:${port}/ws`); 
+
+            websocket.onopen = function() {
+                console.log('WebSocket Connected');
+                statusElement.innerHTML = '<i data-lucide="wifi" class="w-4 h-4 inline mr-2 text-green-500"></i> Kết nối WebSocket thành công.';
+                lucide.createIcons();
+            };
+
+            websocket.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.fft_spectrum_z || data.fft_spectrum_x || data.fft_spectrum_y) {
+                        // --- Xử lý Dữ liệu FFT (Frequency Domain & PID Status) ---
+                        handleFFTData(data);
+                    } 
+                    
+                    // --- Xử lý Dữ liệu Thời gian thực (Gia tốc & Góc) ---
+                    // Kiểm tra sự tồn tại của trường gia tốc mới (ax_g) hoặc góc (angleX)
+                    if (data.ax_g !== undefined) {
+                        handleTimeData(data);
+                        handleAngleData(data); // Xử lý dữ liệu góc mới
+                    }
+                    
+                } catch (e) {
+                    console.error("Lỗi phân tích JSON: ", e, event.data);
+                }
+            };
+
+            websocket.onclose = function() {
+                console.log('WebSocket Disconnected. Reconnecting...');
+                statusElement.innerHTML = '<i data-lucide="wifi-off" class="w-4 h-4 inline mr-2 text-red-500"></i> Mất kết nối. Đang thử kết nối lại...';
+                lucide.createIcons();
+                setTimeout(connectWebSocket, 3000); // Thử kết nối lại sau 3 giây
+            };
+
+            websocket.onerror = function(error) {
+                console.error('WebSocket Error:', error);
+            };
+        }
+
+        // ===================== CẬP NHẬT DỮ LIỆU =====================
+
+        function handleTimeData(data) {
+            // Cập nhật biểu đồ gia tốc (Sử dụng ax_g, ay_g, az_g)
+            xData.shift();
+            xData.push(data.ax_g);
+
+            yData.shift();
+            yData.push(data.ay_g);
+
+            zData.shift();
+            zData.push(data.az_g);
+            
+            timeLabels.shift();
+            timeLabels.push(''); 
+
+            timeChart.update();
+        }
+        
+        function handleAngleData(data) {
+            // Cập nhật biểu đồ góc (Roll, Pitch, Yaw)
+            angleXData.shift();
+            angleXData.push(data.angleX);
+
+            angleYData.shift();
+            angleYData.push(data.angleY);
+
+            angleZData.shift();
+            angleZData.push(data.angleZ);
+            
+            // Dùng chung nhãn thời gian với biểu đồ gia tốc
+            angleChart.update();
+        }
+
+        function handleFFTData(data) {
+            // 1. Cập nhật các chỉ số KPI
+            
+            const fftSpectrumX = data.fft_spectrum_x || [];
+            const fftSpectrumY = data.fft_spectrum_y || [];
+            const fftSpectrumZ = data.fft_spectrum_z || [];
+
+            let peakAmp = 0;
+            if (fftSpectrumX.length) peakAmp = Math.max(peakAmp, ...fftSpectrumX);
+            if (fftSpectrumY.length) peakAmp = Math.max(peakAmp, ...fftSpectrumY);
+            if (fftSpectrumZ.length) peakAmp = Math.max(peakAmp, ...fftSpectrumZ);
+            
+            document.getElementById('rms-value').textContent = parseFloat(data.rms).toFixed(4);
+            document.getElementById('peak-freq-value').textContent = parseFloat(data.peak_freq).toFixed(2);
+            document.getElementById('peak-amp-value').textContent = peakAmp.toFixed(4);
+
+
+            // 2. Cập nhật Trạng thái PID
+            if (data.pid !== undefined) {
+                const pidOutput = parseFloat(data.pid);
+                const rmsValue = parseFloat(data.rms);
+                
+                document.getElementById('pid-output-value').textContent = Math.abs(pidOutput).toFixed(0);
+
+                let directionText = "Dừng (Stop)";
+                let directionClass = "text-gray-500";
+                let directionIcon = "square";
+                const THRESHOLD = 10; 
+                
+                if (pidOutput > THRESHOLD) {
+                    directionText = "Tiến (Forward)";
+                    directionClass = "text-green-600";
+                    directionIcon = "arrow-up";
+                } else if (pidOutput < -THRESHOLD) {
+                    directionText = "Lùi (Backward)";
+                    directionClass = "text-red-600";
+                    directionIcon = "arrow-down";
+                }
+
+                const directionElement = document.getElementById('pid-direction');
+                directionElement.innerHTML = `<i data-lucide="${directionIcon}" class="w-3 h-3 mr-1"></i> ${directionText}`;
+                directionElement.className = `text-sm font-semibold mt-1 flex items-center ${directionClass}`;
+                lucide.createIcons();
+
+                const error = SETPOINT - rmsValue;
+                document.getElementById('current-error').textContent = `Lỗi: ${error.toFixed(4)}`;
+
+                let errorStatusText = "Bình thường";
+                let errorStatusClass = "text-green-700";
+                const ERROR_THRESHOLD = 0.01; 
+
+                if (Math.abs(error) > ERROR_THRESHOLD) {
+                    errorStatusText = error > 0 ? "Thiếu rung (Undershoot)" : "Rung quá mức (Overshoot)";
+                    errorStatusClass = error > 0 ? "text-yellow-700" : "text-red-700";
+                }
+                
+                const errorStatusElement = document.getElementById('error-status');
+                errorStatusElement.textContent = errorStatusText;
+                errorStatusElement.className = `text-3xl font-extrabold mt-1 ${errorStatusClass}`;
+            }
+            
+            // 3. Cập nhật Biểu đồ FFT 3 Trục
+            if (fftSpectrumZ.length > 0) {
+                const SAMPLE_RATE = 1000;
+                const SAMPLE_SIZE = fftSpectrumZ.length * 2; 
+                const frequencyResolution = SAMPLE_RATE / SAMPLE_SIZE;
+                
+                let fftLabels = [];
+                for (let i = 0; i < fftSpectrumZ.length; i++) {
+                    fftLabels.push((i * frequencyResolution).toFixed(1));
+                }
+
+                fftChart.data.labels = fftLabels;
+                fftChart.data.datasets[0].data = fftSpectrumX;
+                fftChart.data.datasets[1].data = fftSpectrumY;
+                fftChart.data.datasets[2].data = fftSpectrumZ;
+                fftChart.update();
+            }
+        }
+
+        // Bắt đầu kết nối khi tải trang
+        window.onload = connectWebSocket;
+    </script>
+</body>
+</html>
