@@ -16,6 +16,14 @@ arduinoFFT FFT = arduinoFFT();
 double vReal[SAMPLE_SIZE];
 double vImag[SAMPLE_SIZE];
 
+double vRealX[SAMPLE_SIZE];
+double vRealY[SAMPLE_SIZE];
+double vRealZ[SAMPLE_SIZE];
+
+double vImagX[SAMPLE_SIZE];
+double vImagY[SAMPLE_SIZE];
+double vImagZ[SAMPLE_SIZE];
+
 // ================== LẤY MẪU FFT ==================
 void collectSamples() {
     unsigned long timer;
@@ -36,7 +44,13 @@ void collectSamples() {
 
         vReal[i] = magnitude;
         vImag[i] = 0;
-
+        
+        vRealX[i] = (double)ax / ACCEL_SCALE;
+        vRealY[i] = (double)ay / ACCEL_SCALE;
+        vRealZ[i] = (double)az / ACCEL_SCALE;
+        vImagX[i] = 0;
+        vImagY[i] = 0;  
+        vImagZ[i] = 0;
         // Chờ đúng chu kỳ lấy mẫu
         while (micros() - timer < SAMPLE_PERIOD_US);
     }

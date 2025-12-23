@@ -51,13 +51,17 @@ bool handleFileRequest(String path);
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length);
 
 // ================== PID CONTROL ==================
-float setpoint = 20;   
-float Kp = 8.0, Ki = 0.30, Kd = 4.0;
+//float setpoint = 25;   
+float Kp = 10.0, Ki = 1.5, Kd = 5.0;
 
-float integral = 0;
-float lastError = 0;
-unsigned long lastPIDTime = 0;
-unsigned long lastPID = 0;
+
+
+float pid_integral = 0;
+float pid_lastError = 0;
+unsigned long pid_lastTime = 0;
+
+float angleX = 0;   // đã lọc
+
 
 // ================== MOTOR CONTROL ==================
 void forward(int speed) {
@@ -80,42 +84,64 @@ void stopMotor() {
 // ================== PID CONTROL ==================
 void balancePID(float angle) {
     unsigned long now = millis();
-    float dt = (now - lastPID) / 1000.0;
-    if (dt <= 0) return;
-    lastPID = now;
+    float dt = (now - pid_lastTime) / 1000.0;
+    if (dt <= 0 || dt > 0.1) {
+        pid_lastTime = now;
+        return;
+    }
+    pid_lastTime = now;
 
-    // ====== SETPOINT ======
-    float setpoint = 25.0;   // cân bằng
+    // ===== SETPOINT =====
+    float setpoint = 10.0;  // cân bằng tại 0°
 
-    // ====== ERROR ======
-    float error = setpoint - angle;   // ĐƠN VỊ: độ (°)
+    // ===== ERROR =====
+    float error = setpoint - angle;   // đơn vị: độ
 
-    // ====== INTEGRAL ======
-    integral += error * dt;
-    integral = constrain(integral, -30.0, 30.0);  // chống windup
+    // ===== INTEGRAL (chống windup) =====
+    pid_integral += error * dt;
+    pid_integral = constrain(pid_integral, -20.0, 20.0);
 
-    // ====== DERIVATIVE ======
-    float derivative = (error - lastError) / dt;
-    lastError = error;
+    // ===== DERIVATIVE =====
+    float derivative = (error - pid_lastError) / dt;
+    pid_lastError = error;
 
-    // ====== PID OUTPUT ======
-    float output = Kp * error + Ki * integral + Kd * derivative;
-
+    // ===== PID OUTPUT =====
+    float output = Kp * error + Ki * pid_integral + Kd * derivative;
     output = constrain(output, -255, 255);
 
-    // ====== DEADZONE ======
-    if (abs(error) < 25) {   // lệch < 0.5°
+    // ===== DEAD ZONE =====
+    if (abs(error) < 10) {
         stopMotor();
         return;
     }
 
-    // ====== MOTOR CONTROL ======
-    if (output > 25) {
-        forward(abs(output));
+    // ===== MOTOR DRIVE =====
+    if (output > 10) {
+        forward((int)output);
     } else {
-        backward(abs(output));
+        backward((int)(-output));
     }
 }
+
+
+void updateAngleAndPID() {
+    int16_t ax, ay, az;
+    readAccel(ax, ay, az);
+
+    float ax_g = ax / ACCEL_SCALE;
+    float ay_g = ay / ACCEL_SCALE;
+    float az_g = az / ACCEL_SCALE;
+
+    // Góc thô
+    float angleX_raw = atan2(ay_g, az_g) * 180.0 / PI;
+
+    // Low-pass filter
+    angleX = 0.9 * angleX + 0.1 * angleX_raw;
+
+    // PID
+    balancePID(angleX);
+}
+
 
 
 
@@ -224,21 +250,13 @@ void loop() {
     // =================================================
     // ========== 1. PID GÓC – CHẠY NHANH (100 Hz) ======
     // =================================================
-    if (millis() - lastPID >= 10) {   // 10 ms
-        lastPID = millis();
+     
 
-        int16_t ax, ay, az;
-        readAccel(ax, ay, az);
+if (millis() - lastPID >= 10) { // 100 Hz
+    lastPID = millis();
+    updateAngleAndPID();
+}
 
-        float ax_g = ax / ACCEL_SCALE;
-        float ay_g = ay / ACCEL_SCALE;
-        float az_g = az / ACCEL_SCALE;
-
-        // Roll angle (trục X)
-        float angleX = atan2(ay_g, az_g) * 180.0 / PI;
-
-        balancePID(angleX);   
-    }
 
     // =================================================
     // ========== 2. GỬI DỮ LIỆU REALTIME (100 ms) ======
@@ -283,18 +301,35 @@ void loop() {
             if (vReal[i] > peakAmp) peakAmp = vReal[i];
 
         String json = "{";
-        json += "\"fft\":true,";
-        json += "\"rms\":" + String(rmsValue, 4) + ",";
-        json += "\"peak_freq\":" + String(peakFreq, 2) + ",";
-        json += "\"peak_amp\":" + String(peakAmp, 4) + ",";
-        json += "\"fft_spectrum_z\":[";
+json += "\"fft\":true,";
+json += "\"rms\":" + String(rmsValue, 4) + ",";
+json += "\"peak_freq\":" + String(peakFreq, 2) + ",";
+json += "\"peak_amp\":" + String(peakAmp, 4) + ",";
 
-        for (int i = 0; i < SAMPLE_SIZE / 2; i++) {
-            json += String(vReal[i], 4);
-            if (i < SAMPLE_SIZE / 2 - 1) json += ",";
-        }
-        json += "]}";
+json += "\"fft_spectrum_x\":[";
+for (int i = 0; i < SAMPLE_SIZE / 2; i++) {
+    json += String(vRealX[i], 4);
+    if (i < SAMPLE_SIZE / 2 - 1) json += ",";
+}
+json += "],";
 
-        webSocket.broadcastTXT(json);
+json += "\"fft_spectrum_y\":[";
+for (int i = 0; i < SAMPLE_SIZE / 2; i++) {
+    json += String(vRealY[i], 4);
+    if (i < SAMPLE_SIZE / 2 - 1) json += ",";
+}
+json += "],";
+
+json += "\"fft_spectrum_z\":[";
+for (int i = 0; i < SAMPLE_SIZE / 2; i++) {
+    json += String(vRealZ[i], 4);
+    if (i < SAMPLE_SIZE / 2 - 1) json += ",";
+}
+json += "]";
+
+json += "}";
+
+webSocket.broadcastTXT(json);
+
     }
 }
